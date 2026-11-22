@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -6,12 +5,13 @@ pipeline {
         AWS_REGION = 'ap-south-1'
         AWS_ACCOUNT_ID = '601510715785'
         ECR_REPOSITORY = 'static-website'
-        IMAGE_TAG = '1'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
     }
 
     stages {
 
-        // Stage 1: Checkout GitHub repository
         stage('GitHub Checkout') {
             steps {
                 git branch: 'main',
@@ -21,7 +21,6 @@ pipeline {
             }
         }
 
-        // Stage 2: Build Docker image
         stage('Build Docker Image') {
             steps {
                 sh '''
@@ -30,19 +29,51 @@ pipeline {
             }
         }
 
-        // Stage 3: Stop old container
-        stage('Stop Old Container') {
+        stage('AWS ECR Login') {
+            steps {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-ecr-creds']
+                ]) {
+
+                    sh '''
+                        aws ecr get-login-password \
+                        --region ${AWS_REGION} | \
+                        docker login \
+                        --username AWS \
+                        --password-stdin \
+                        ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                    '''
+                }
+            }
+        }
+
+        stage('Tag Docker Image') {
             steps {
                 sh '''
-                    docker rm -f nginx-webapp || true
+                    docker tag nginx-webapp:${IMAGE_TAG} \
+                    ${ECR_URI}:${IMAGE_TAG}
+
+                    docker tag nginx-webapp:${IMAGE_TAG} \
+                    ${ECR_URI}:latest
                 '''
             }
         }
 
-        // Stage 4: Run new container
-        stage('Run New Container') {
+        stage('Push Image to ECR') {
             steps {
                 sh '''
+                    docker push ${ECR_URI}:${IMAGE_TAG}
+                    docker push ${ECR_URI}:latest
+                '''
+            }
+        }
+
+        stage('Deploy Local Container') {
+            steps {
+                sh '''
+                    docker rm -f nginx-webapp || true
+
                     docker run -d \
                     --name nginx-webapp \
                     -p 82:80 \
@@ -54,12 +85,12 @@ pipeline {
 
     post {
         success {
-            echo 'CI/CD Pipeline Completed Successfully!'
-            echo 'Docker container is running on port 82.'
+            echo 'Docker Image Successfully Pushed To ECR'
+            echo "ECR Image: ${ECR_URI}:${IMAGE_TAG}"
         }
 
         failure {
-            echo 'CI/CD Pipeline Failed. Check Console Output.'
+            echo 'Pipeline Failed'
         }
     }
 }
