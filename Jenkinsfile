@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -32,11 +33,18 @@ pipeline {
         stage('AWS ECR Login') {
             steps {
                 withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-ecr-creds']
+                    usernamePassword(
+                        credentialsId: 'aws_new',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
                 ]) {
-
                     sh '''
+                        export AWS_ACCESS_KEY_ID
+                        export AWS_SECRET_ACCESS_KEY
+
+                        aws sts get-caller-identity
+
                         aws ecr get-login-password \
                         --region ${AWS_REGION} | \
                         docker login \
