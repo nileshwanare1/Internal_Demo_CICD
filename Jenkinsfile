@@ -11,8 +11,8 @@ pipeline {
 
         ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
 
-        ECS_CLUSTER = 'static-website-cluster'
-        ECS_SERVICE = 'static-website-service'
+        ECS_CLUSTER = 'ECS_Cluster'
+        ECS_SERVICE = 'static-website-task-service'
         ECS_TASK_FAMILY = 'static-website-task'
         ECS_CONTAINER_NAME = 'nginx-webapp'
 
