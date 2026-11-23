@@ -101,63 +101,57 @@ pipeline {
                         )
                     ]) {
 
-                        env.TASK_DEF_ARN = sh(
-                            returnStdout: true,
-                            script: '''
-                                set -e
+                        def taskDefinitionArn = sh(
+                    script: '''
+                        set -e
 
-                                export AWS_ACCESS_KEY_ID
-                                export AWS_SECRET_ACCESS_KEY
+                        aws ecs describe-task-definition \
+                        --task-definition static-website-task \
+                        --region ap-south-1 \
+                        --query taskDefinition \
+                        --output json > task-definition-current.json
 
-                                echo "Fetching existing ECS task definition..."
+                        jq -e --arg name nginx-webapp \
+                        '.containerDefinitions[] | select(.name == $name)' \
+                        task-definition-current.json > /dev/null
 
-                                aws ecs describe-task-definition \
-                                    --task-definition ${ECS_TASK_FAMILY} \
-                                    --region ${AWS_REGION} \
-                                    --query 'taskDefinition' \
-                                    --output json > task-definition-current.json
+                        jq --arg container nginx-webapp \
+                        --arg image 601510715785.dkr.ecr.ap-south-1.amazonaws.com/static-website:${BUILD_NUMBER} \
+                        '
+                        del(
+                            .taskDefinitionArn,
+                            .revision,
+                            .status,
+                            .requiresAttributes,
+                            .compatibilities,
+                            .registeredAt,
+                            .registeredBy,
+                            .deregisteredAt
+                        )
+                        |
+                        (
+                            .containerDefinitions[]
+                            | select(.name == $container)
+                            | .image
+                        ) = $image
+                        ' task-definition-current.json > task-definition-new.json
 
-                                echo "Validating container name..."
+                        aws ecs register-task-definition \
+                        --cli-input-json file://task-definition-new.json \
+                        --region ap-south-1 \
+                        --query 'taskDefinition.taskDefinitionArn' \
+                        --output text
+                    ''',
+                    returnStdout: true
+                ).trim()
 
-                                jq -e --arg name "${ECS_CONTAINER_NAME}" \
-                                    '.containerDefinitions[] | select(.name == $name)' \
-                                    task-definition-current.json > /dev/null
+                if (!taskDefinitionArn.startsWith('arn:aws:ecs:')) {
+                    error("Invalid ECS Task Definition ARN: ${taskDefinitionArn}")
+                }
 
-                                echo "Updating container image..."
+                env.NEW_TASK_DEFINITION = taskDefinitionArn
 
-                                jq --arg container "${ECS_CONTAINER_NAME}" \
-                                   --arg image "${ECR_URI}:${IMAGE_TAG}" '
-
-                                    del(
-                                        .taskDefinitionArn,
-                                        .revision,
-                                        .status,
-                                        .requiresAttributes,
-                                        .compatibilities,
-                                        .registeredAt,
-                                        .registeredBy,
-                                        .deregisteredAt
-                                    )
-                                    |
-                                    (
-                                        .containerDefinitions[]
-                                        | select(.name == $container)
-                                        | .image
-                                    ) = $image
-
-                                ' task-definition-current.json > task-definition-new.json
-
-                                echo "Registering new ECS task definition..."
-
-                                aws ecs register-task-definition \
-                                    --cli-input-json file://task-definition-new.json \
-                                    --region ${AWS_REGION} \
-                                    --query 'taskDefinition.taskDefinitionArn' \
-                                    --output text
-                            '''
-                        ).trim()
-
-                        echo "New Task Definition: ${env.TASK_DEF_ARN}"
+                echo "New Task Definition: ${env.NEW_TASK_DEFINITION}"
                     }
                 }
             }
@@ -176,39 +170,26 @@ pipeline {
                         passwordVariable: 'AWS_SECRET_ACCESS_KEY'
                     )
                 ]) {
-
                     sh '''
-                        set -e
+    set -e
 
-                        export AWS_ACCESS_KEY_ID
-                        export AWS_SECRET_ACCESS_KEY
+    echo "Updating ECS service..."
 
-                        echo "Updating ECS service..."
+    aws ecs update-service \
+    --cluster "${ECS_CLUSTER}" \
+    --service "${ECS_SERVICE}" \
+    --task-definition "${NEW_TASK_DEFINITION}" \
+    --region "${AWS_REGION}"
 
-                        aws ecs update-service \
-                            --cluster ${ECS_CLUSTER} \
-                            --service ${ECS_SERVICE} \
-                            --task-definition ${TASK_DEF_ARN} \
-                            --region ${AWS_REGION}
+    echo "Waiting for ECS service stability..."
 
-                        echo "Waiting for ECS deployment to complete..."
+    aws ecs wait services-stable \
+    --cluster "${ECS_CLUSTER}" \
+    --services "${ECS_SERVICE}" \
+    --region "${AWS_REGION}"
 
-                        aws ecs wait services-stable \
-                            --cluster ${ECS_CLUSTER} \
-                            --services ${ECS_SERVICE} \
-                            --region ${AWS_REGION}
-
-                        echo "ECS deployment completed successfully!"
-
-                        echo "Checking ECS service status..."
-
-                        aws ecs describe-services \
-                            --cluster ${ECS_CLUSTER} \
-                            --services ${ECS_SERVICE} \
-                            --region ${AWS_REGION} \
-                            --query 'services[0].[status,desiredCount,runningCount,pendingCount]' \
-                            --output table
-                    '''
+    echo "ECS deployment completed successfully!"
+'''
                 }
             }
         }
